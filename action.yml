@@ -6,7 +6,10 @@ branding:
   color: "orange"
 inputs:
   branch:
-    description: Name of the branch where the sphinx documentation is located
+    description: >-
+      Name of the branch where the sphinx documentation is located. Set it to an
+      empty string to build whatever reference the workflow already checked out,
+      which is what a tag-triggered release usually wants.
     required: false
     default: 'main'
   branch-checkout-args:
@@ -24,11 +27,11 @@ inputs:
     default: true
   sphinx-apidoc-exclude:
     description: Files/directories to exclude from sphinx-apidoc
-    require: false
+    required: false
     default: '*setup* tests*'
   sphinx-apidoc-opts:
     description: Options for sphinx-apidoc (default outputs to dir_docs and searches for modules one level up)
-    require: false
+    required: false
     default: '-o . ../'
   sphinx-opts:
     description: Compilation options for sphinx-build
@@ -42,6 +45,7 @@ runs:
       id: committer
       shell: bash
       run: |
+        set -euo pipefail
         author_name="$(git show --format=%an -s)"
         author_email="$(git show --format=%ae -s)"
         echo "::group::Set committer"
@@ -54,6 +58,7 @@ runs:
       id: gh-pages-branch-creation
       shell: bash
       run: |
+        set -euo pipefail
         echo "::group::Checking if gh-pages branch exists"
         if [[ -z "$(git ls-remote --heads origin gh-pages)" ]]; then
            echo "Creating gh-pages branch"
@@ -69,15 +74,33 @@ runs:
     - name: Moving to branch where sphinx docs are located
       id: to-branch-with-docs
       shell: bash
+      env:
+        BRANCH: ${{ inputs.branch }}
+        CHECKOUT_ARGS: ${{ inputs.branch-checkout-args }}
       run: |
-           git checkout ${{ inputs.branch-checkout-args }} "${{ inputs.branch }}"
+        set -euo pipefail
+        if [ -z "$BRANCH" ]; then
+          echo "No branch requested: building the reference already checked out."
+          git rev-parse --short HEAD
+          exit 0
+        fi
+        # $CHECKOUT_ARGS is intentionally unquoted so that several arguments split
+        # into several words. It is read from the environment, not interpolated
+        # into this script, so its content cannot become shell syntax.
+        git checkout $CHECKOUT_ARGS "$BRANCH"
     - name: sphinx apidoc generation
       shell: bash -l {0}
       working-directory: ./${{ inputs.dir_docs }}
+      env:
+        WITH_APIDOC: ${{ inputs.sphinx-apidoc }}
+        APIDOC_OPTS: ${{ inputs.sphinx-apidoc-opts }}
+        APIDOC_EXCLUDE: ${{ inputs.sphinx-apidoc-exclude }}
       run: |
+        set -euo pipefail
         echo ::group::Sphinx apidocs generation
-        if "${{ inputs.sphinx-apidoc }}"; then
-          sphinx-apidoc ${{ inputs.sphinx-apidoc-opts }}  ${{ inputs.sphinx-apidoc-exclude }}
+        if [ "$WITH_APIDOC" = "true" ]; then
+          # Unquoted on purpose: both carry several arguments. See the note above.
+          sphinx-apidoc $APIDOC_OPTS $APIDOC_EXCLUDE
         else
           echo "Step disabled"
         fi
@@ -85,24 +108,36 @@ runs:
     - name: sphinx html docs compilation
       shell: bash -l {0}      # This is needed to work with conda here. See:https://github.com/marketplace/actions/setup-miniconda#IMPORTANT
       working-directory: ./${{ inputs.dir_docs }}
+      env:
+        SPHINX_OPTS: ${{ inputs.sphinx-opts }}
       run: |
+        set -euo pipefail
         echo ::group::Sphinx docs compilation
-        sphinx-build -M html . _build ${{ inputs.sphinx-opts }}
+        # Unquoted on purpose: it carries several arguments. See the note above.
+        sphinx-build -M html . _build $SPHINX_OPTS
         echo ::endgroup::
     - name: pushing to gh-pages
       shell: bash
+      env:
+        DIR_DOCS: ${{ inputs.dir_docs }}
+        BRANCH: ${{ inputs.branch }}
       run: |
+        set -euo pipefail
         echo ::group::Create README for gh-pages
         SHA=$GITHUB_SHA
         echo "$SHA $GITHUB_EVENT_NAME"
         if [ "$GITHUB_EVENT_NAME" == "pull_request" ]; then
-          SHA=$(cat "$GITHUB_EVENT_PATH" | jq -r .pull_request.head.sha)
+          SHA=$(jq -r .pull_request.head.sha < "$GITHUB_EVENT_PATH")
         fi
         SHORT_SHA="$(git rev-parse --short "$SHA")"
-        if [ "${{ inputs.dir_docs }}" == "." ]; then
+        if [ "$DIR_DOCS" == "." ]; then
           DIR_HTML="_build/html/"
         else
-          DIR_HTML="${{ inputs.dir_docs }}/_build/html/"
+          DIR_HTML="$DIR_DOCS/_build/html/"
+        fi
+        if [ ! -d "$DIR_HTML" ]; then
+          echo "::error::Sphinx produced no '$DIR_HTML' directory. Nothing was published."
+          exit 1
         fi
         echo "#GitHub Pages" > "$DIR_HTML/README.md"
         echo "" >> "$DIR_HTML/README.md"
@@ -115,5 +150,6 @@ runs:
         echo ::group::Push to gh-pages
         git add -f "$DIR_HTML"
         git commit -m "From $GITHUB_REF $SHA"
-        git push origin `git subtree split --prefix "$DIR_HTML" "${{ inputs.branch }}"`:gh-pages --force
+        SUBTREE_REF="$(git subtree split --prefix "$DIR_HTML" "${BRANCH:-HEAD}")"
+        git push origin "$SUBTREE_REF":gh-pages --force
         echo ::endgroup::

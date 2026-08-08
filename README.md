@@ -15,6 +15,26 @@ In summary, this GitHub action does the following:
 - Compiles the sphinx documentation in the directory and branch specified by the user.
 - Pushes the output html documentation to the `gh-pages` branch.
 
+## What changed in v3.0.0
+
+**A failed compilation used to be reported as a success.** The `sphinx-apidoc` and
+`sphinx-build` steps ran under a login shell without `-e`, and each block ended in an
+`echo`, so the exit status came from the `echo` and not from Sphinx. A build that aborted —
+a missing extension, a broken configuration — left the step green and the workflow carried
+on. If a previous `_build/html` happened to exist, the stale site was published as if it
+were new. Every step now runs under `set -euo pipefail`, and the deployment step refuses to
+publish when Sphinx produced no html directory.
+
+**This is why v3.0.0 is a major version.** Nothing was removed and no default changed, but
+a workflow that was quietly failing will now fail out loud. That is the intended outcome:
+the previous behaviour is not something anyone should be pinned to. Consumers pinned to
+`@v2.1.0` are unaffected until they upgrade.
+
+Also in this release: `branch: ''` builds the reference the workflow already checked out,
+instead of always moving to a branch; inputs reach the scripts through the environment
+rather than being interpolated into them; and two inputs that were misspelled `require:`
+instead of `required:` in the action's own specification are fixed.
+
 This GitHub Action was developed by [the Computational Biology and Drug Design Research Unit -UIBCDF- at the
 Mexico City Children's Hospital Federico Gómez](https://www.uibcdf.org/) (see also
 [Contributers](https://github.com/uibcdf/action-sphinx-docs-to-gh-pages/graphs/contributors)). Other GitHub Actions can
@@ -54,14 +74,16 @@ jobs:
   sphinx_docs_to_gh-pages:
     runs-on: ubuntu-latest
     name: Sphinx docs to gh-pages
+    permissions:
+      contents: write    # this action pushes the compiled html to the gh-pages branch
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Make conda environment
-        uses: conda-incubator/setup-miniconda@v2
+        uses: conda-incubator/setup-miniconda@v4
         with:
-          python-version: 3.10    # Python version to build the html sphinx documentation
+          python-version: 3.12    # Python version to build the html sphinx documentation
           environment-file: devtools/conda-envs/docs_env.yaml    # Path to the documentation conda environment
           auto-update-conda: false
           auto-activate-base: false
@@ -69,9 +91,9 @@ jobs:
       - name: Installing the library
         shell: bash -l {0}
         run: |
-          python setup.py install
+          pip install .
       - name: Running the Sphinx to gh-pages Action
-        uses: uibcdf/action-sphinx-docs-to-gh-pages@v2.1.0
+        uses: uibcdf/action-sphinx-docs-to-gh-pages@v3.0.0
         with:
           branch: main
           dir_docs: docs
@@ -89,19 +111,32 @@ These are the input parameters of the action:
 
 | Input parameters        | Description                                                                                         | Default value    |
 |-------------------------|-----------------------------------------------------------------------------------------------------|------------------|
-| `branch`                | Name of the branch where the sphinx documentation is located                                        | `main`           |
+| `branch`                | Name of the branch where the sphinx documentation is located. Set it to `''` to build the reference the workflow already checked out | `main`           |
 | `branch-checkout-args`  | Arguments to pass to `git checkout`: `git checkout ${checkout-args} "${branch}"`                    | ''               |
 | `dir_docs`              | Path where the sphinx documentation is located                                                      | `docs`           |
-| `sphinx-apidoc`         | With sphinx-apidoc                                                                                  | true             |
-| `sphinx-apidoc-exclude` | With sphinx-apidoc                                                                                  | `*setup* tests*` |
+| `sphinx-apidoc`         | Whether to run `sphinx-apidoc` before compiling. Set it to `false` if your project writes its own API reference | true             |
+| `sphinx-apidoc-exclude` | Files/directories to exclude from sphinx-apidoc                                                     | `*setup* tests*` |
 | `sphinx-apidoc-opts`    | Options for sphinx-apidoc (default outputs to dir_docs and searches for modules one level up)       | '-o . ../'       |
 | `sphinx-opts`           | Compilation options for sphinx-build                                                                | ''               |
+
+Two of them deserve a note:
+
+- **`sphinx-apidoc` is enabled by default**, and it generates one `.rst` file per package
+  and subpackage into `dir_docs`. If your project already maintains its own API reference —
+  written by hand, or generated with `autosummary` from pages you control — those generated
+  files are a second, parallel API tree that no toctree includes. They are still built and
+  published, and every one of them raises a Sphinx warning. Set `sphinx-apidoc: false` in
+  that case.
+- **`branch` decides what gets published, not what triggered the workflow.** With the default
+  `main`, a workflow triggered by a release tag checks out the tag and then this action moves
+  to `main`, so the published documentation is the tip of `main` and not the released version.
+  Set `branch: ''` to build whatever reference the workflow checked out.
 
 They are placed in the last lines of the above workflow example file:
 
 ```yaml
       - name: Running the Sphinx to gh-pages Action
-        uses: uibcdf/action-sphinx-docs-to-gh-pages@v2.1.0
+        uses: uibcdf/action-sphinx-docs-to-gh-pages@v3.0.0
           with:
             branch: main
             dir_docs: docs
@@ -137,7 +172,7 @@ dependencies:
 
   # Write here all dependencies to compile the sphinx documentation.
   # This list is just an example
-  - python=3.10
+  - python=3.12
   - sphinx
   - sphinx_rtd_theme
   - sphinxcontrib-bibtex
@@ -154,7 +189,7 @@ jobs:
   sphinx_docs_to_gh-pages:
     steps:
       - name: Make conda environment
-        uses: conda-incubator/setup-miniconda@v2
+        uses: conda-incubator/setup-miniconda@v4
         with:
           # Replace with the path to your documentation conda enviroment file
           environment-file: devtools/conda-envs/docs_env.yaml
@@ -187,9 +222,9 @@ jobs:
   sphinx_docs_to_gh-pages:
     steps:
       - name: Setup Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v7
         with:
-          python-version: 3.10
+          python-version: 3.12
       - name: Installing the Documentation requirements
         run: |
           pip3 install .[docs]
