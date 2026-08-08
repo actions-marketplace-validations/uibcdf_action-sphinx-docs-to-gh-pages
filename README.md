@@ -17,6 +17,17 @@ In summary, this GitHub action does the following:
 
 ## What changed in v3.0.0
 
+**`sphinx-apidoc` no longer runs by default.** It used to, and it generates one `.rst`
+file per package and subpackage into `dir_docs`. A project that maintains its own API
+reference — written by hand, or generated with `autosummary` from pages it controls — was
+getting a second, parallel API tree that no toctree includes, built and published all the
+same, with one Sphinx warning per file. That is the wrong default for such a project, and
+it was silent.
+
+If your API reference *is* the one `sphinx-apidoc` produces, set `sphinx-apidoc: true` and
+nothing else changes. When the step is skipped the action now says so in the workflow log,
+because a missing page sends you to the log and not to this README.
+
 **A failed compilation used to be reported as a success.** The `sphinx-apidoc` and
 `sphinx-build` steps ran under a login shell without `-e`, and each block ended in an
 `echo`, so the exit status came from the `echo` and not from Sphinx. A build that aborted —
@@ -114,19 +125,20 @@ These are the input parameters of the action:
 | `branch`                | Name of the branch where the sphinx documentation is located. Set it to `''` to build the reference the workflow already checked out | `main`           |
 | `branch-checkout-args`  | Arguments to pass to `git checkout`: `git checkout ${checkout-args} "${branch}"`                    | ''               |
 | `dir_docs`              | Path where the sphinx documentation is located                                                      | `docs`           |
-| `sphinx-apidoc`         | Whether to run `sphinx-apidoc` before compiling. Set it to `false` if your project writes its own API reference | true             |
+| `sphinx-apidoc`         | Whether to run `sphinx-apidoc` before compiling. Set it to `true` if your API reference is the one it generates | false            |
 | `sphinx-apidoc-exclude` | Files/directories to exclude from sphinx-apidoc                                                     | `*setup* tests*` |
 | `sphinx-apidoc-opts`    | Options for sphinx-apidoc (default outputs to dir_docs and searches for modules one level up)       | '-o . ../'       |
 | `sphinx-opts`           | Compilation options for sphinx-build                                                                | ''               |
 
 Two of them deserve a note:
 
-- **`sphinx-apidoc` is enabled by default**, and it generates one `.rst` file per package
-  and subpackage into `dir_docs`. If your project already maintains its own API reference —
-  written by hand, or generated with `autosummary` from pages you control — those generated
-  files are a second, parallel API tree that no toctree includes. They are still built and
-  published, and every one of them raises a Sphinx warning. Set `sphinx-apidoc: false` in
-  that case.
+- **`sphinx-apidoc` is disabled by default since v3.0.0.** It generates one `.rst` file per
+  package and subpackage into `dir_docs`. If your project already maintains its own API
+  reference — written by hand, or generated with `autosummary` from pages you control —
+  those generated files are a second, parallel API tree that no toctree includes. They are
+  still built and published, and every one of them raises a Sphinx warning. Set
+  `sphinx-apidoc: true` only if the reference you publish is the one it produces; the action
+  writes a notice in the log whenever the step is skipped.
 - **`branch` decides what gets published, not what triggered the workflow.** With the default
   `main`, a workflow triggered by a release tag checks out the tag and then this action moves
   to `main`, so the published documentation is the tip of `main` and not the released version.
